@@ -362,35 +362,60 @@ function detectAgentState(sessionName, sessionsCache) {
   const pid = getSessionPid(sessionName);
   if (!isProcessAlive(pid)) return 'completed';
 
+  // Grace period: if a message was recently sent, treat as running
+  // (Claude may not have started producing output yet)
+  if (reg.lastMessageSentAt && (Date.now() - reg.lastMessageSentAt) < 10000) {
+    return 'running';
+  }
+
   const rawOutput = capturePaneOutput(sessionName, 50);
   const output = stripAnsi(rawOutput);
   const lines = output.split('\n').filter(l => l.trim() !== '');
 
   if (lines.length === 0) return 'running';
 
-  const lastLine = lines[lines.length - 1].trim();
+  const recentText = lines.slice(-8).map(l => l.trim()).join('\n');
+
+  // Claude Code's status bar shows "esc to interrupt" only when actively running
+  if (/esc to interrupt/i.test(recentText)) {
+    return 'running';
+  }
+
+  // Filter out persistent UI elements (status bar, separators, empty prompt)
+  // to find the actual last content line
+  const uiNoise = [
+    /bypass permissions/i,
+    /shift.?tab to cycle/i,
+    /ctrl.?t to hide/i,
+    /^[─━═]+$/,
+    /^❯\s*$/,
+  ];
+  const contentLines = lines.filter(l => !uiNoise.some(p => p.test(l.trim())));
+
+  if (contentLines.length === 0) return 'running';
+
+  const lastLine = contentLines[contentLines.length - 1].trim();
 
   const idlePatterns = [
     /^>\s*$/,
     /^>\s+$/,
     /^\$\s*$/,
     /^❯\s*$/,
+    /^❯\s+\S/,                            // Prompt with previous input visible
     /has completed/i,
     /what.*would.*like/i,
     /anything.*else/i,
     /can i help/i,
     /waiting for input/i,
-    /bypass permissions/i,
-    /shift.?tab to cycle/i,
   ];
 
   if (idlePatterns.some(p => p.test(lastLine))) {
     return 'idle';
   }
 
-  // Check last several lines for signs Claude is waiting for user input
+  // Check last several content lines for signs Claude is waiting for user input
   // (permission prompts, questions, plan approvals, etc.)
-  const recentLines = lines.slice(-8).map(l => l.trim()).join('\n');
+  const recentContent = contentLines.slice(-8).map(l => l.trim()).join('\n');
 
   const waitingForInputPatterns = [
     /Allow\s+(once|always)/i,              // Permission prompt options
@@ -406,7 +431,7 @@ function detectAgentState(sessionName, sessionsCache) {
     /press enter to send/i,               // Message input prompt
   ];
 
-  if (waitingForInputPatterns.some(p => p.test(recentLines))) {
+  if (waitingForInputPatterns.some(p => p.test(recentContent))) {
     return 'idle';
   }
 
@@ -459,6 +484,7 @@ function buildAgentInfo(sessionName, sessionsCache) {
       registry[sessionName].idleSince = Date.now();
     } else if (state !== 'idle') {
       delete registry[sessionName].idleSince;
+      delete registry[sessionName].lastMessageSentAt;
     }
   }
 
@@ -598,6 +624,7 @@ app.post('/api/agents/:name/send', (req, res) => {
     if (success) {
       if (reg) {
         reg.state = 'running';
+        reg.lastMessageSentAt = Date.now();
         delete reg.idleSince;
         saveRegistry();
       }
