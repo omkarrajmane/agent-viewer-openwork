@@ -2,6 +2,9 @@
 
 A kanban board for managing multiple Claude Code agents running in tmux sessions. Spawn, monitor, and interact with agents from a single web UI.
 
+![Uploading Screenshot 2026-02-09 at 14.54.21.png…]()
+
+
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) (v18+)
