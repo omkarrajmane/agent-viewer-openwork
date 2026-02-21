@@ -8,7 +8,6 @@ Manage your agents from your mobile phone with Tailscale
 
 ![IMG_7782](https://github.com/user-attachments/assets/c7298d61-dd37-4d0f-8b0a-d9d1f0231782)
 
-
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) (v18+)
@@ -42,13 +41,66 @@ Open http://localhost:4200 in your browser.
 | Variable | Default     | Description              |
 |----------|-------------|--------------------------|
 | `PORT`   | `4200`      | Server port              |
-| `HOST`   | `localhost`  | Bind address (`0.0.0.0` for network access) |
+| `HOST`   | `0.0.0.0`   | Bind address (`localhost` for local-only) |
 
 Example:
 
 ```bash
 HOST=0.0.0.0 PORT=3000 npm start
 ```
+
+## Architecture
+
+Agent Viewer is a two-file application with no build step or frameworks:
+
+| File | Purpose |
+|------|---------|
+| `server.js` | Express backend: agent lifecycle, tmux integration, state detection, SSE broadcasting |
+| `public/index.html` | Single-file frontend: HTML, CSS, and vanilla JavaScript |
+
+### Backend (server.js)
+
+- **Agent Registry** — In-memory state with `.agent-registry.json` persistence. Tracks label, project path, prompt, state, and timestamps. Auto-recovers on restart.
+- **State Detection** — Polls tmux pane output every 3 seconds. Classifies agents as `running`, `idle`, or `completed` via pattern-matching OpenCode's terminal UI.
+- **Tmux Integration** — Spawns via `tmux new-session`, captures output via `tmux capture-pane`, sends input via `tmux send-keys`. All commands use timeouts (5–15s).
+- **Auto-Discovery** — Scans tmux sessions and process trees to detect existing OpenCode instances and add them to the board.
+- **SSE** — `GET /api/events` broadcasts full agent state to all clients at 3s intervals.
+
+### Frontend (public/index.html)
+
+- **Dual view modes** — Kanban (Running/Idle/Completed columns) and Grid (2-column card layout). View preference persisted in `localStorage`.
+- **ANSI-to-HTML** — Full terminal output rendering with 16/256/24-bit color support.
+- **Responsive** — Mobile tab bar, floating action button, and safe-area insets for notched devices.
+
+## Features
+
+### Views
+
+- **Kanban board** — Three columns (Running, Idle, Completed). Drag cards between columns. Bulk "Clear All" for completed agents.
+- **Grid view** — All agents in a responsive grid. Toggle with `V` or the header button. Ideal for scanning many agents at once.
+
+### Agent lifecycle
+
+- **Spawn** — Click `[+ SPAWN]` or press `N`. Enter project path (with recent-projects dropdown and folder browser) and prompt. Each agent runs in its own tmux session.
+- **Auto-discovery** — Existing OpenCode tmux sessions are detected and added automatically.
+- **Re-spawn** — Completed agents accept a new prompt to start a fresh task in the same project.
+
+### Interaction
+
+- **Send messages** — Type in the prompt field on any card and press `Ctrl+Enter` to send follow-up messages.
+- **File uploads** — Drag and drop files onto a card or click `FILE`. Supports images, PDFs, text, and code files.
+- **Live output** — Click `VIEW OUTPUT` for a full-screen terminal overlay with ANSI colors. Send messages and keys from the overlay.
+- **Interactive prompts** — When OpenCode shows select, permission, plan, or yes/no prompts, on-card buttons let you navigate (↑/↓), confirm (Enter), or cancel (Esc) without opening the terminal.
+- **Terminal attach** — Click `TERMINAL` to copy the `tmux attach` command for direct terminal access.
+
+### Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| `N` | Open spawn modal |
+| `V` | Toggle Kanban ↔ Grid view |
+| `Escape` | Close modal, output viewer, or confirm dialog |
+| `Ctrl+Enter` | Send message from prompt field |
 
 ## Remote Access via Tailscale
 
@@ -87,14 +139,3 @@ If you have [MagicDNS](https://tailscale.com/kb/1081/magicdns) enabled, you can 
 ```
 http://<machine-name>:4200
 ```
-
-## Features
-
-- **Spawn agents** — Click `[+ SPAWN]` or press `N`, enter a project path and prompt. Each agent launches in its own tmux session running `opencode`.
-- **Kanban columns** — Agents are sorted into Running, Idle, and Completed columns based on their state.
-- **Auto-discovery** — Existing tmux sessions running OpenCode are automatically detected and added to the board.
-- **Live output** — Click `VIEW OUTPUT` to see the full terminal output with ANSI color rendering.
-- **Send messages** — Type in the prompt field on any card and press `Ctrl+Enter` to send follow-up messages to an agent.
-- **File uploads** — Drag and drop files onto a card or click `FILE` to send files to an agent.
-- **Re-spawn** — Completed agents can be re-spawned with a new prompt from the same project directory.
-- **Attach** — Click `ATTACH` to copy the `tmux attach` command for direct terminal access.
