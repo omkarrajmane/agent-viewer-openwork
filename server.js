@@ -41,7 +41,7 @@ function saveRegistry() {
 
 // ─── Label Generation (LLM-powered) ─────────────────────────────────────────
 
-console.log('[LABEL] Using claude CLI for smart label generation');
+console.log('[LABEL] Using opencode CLI for smart label generation');
 
 function fallbackLabel(text) {
   if (!text) return 'task-' + Date.now().toString(36);
@@ -50,39 +50,8 @@ function fallbackLabel(text) {
   return words.slice(0, 4).join('-') || 'task-' + Date.now().toString(36);
 }
 
-function callClaude(systemPrompt, userText) {
-  return new Promise((resolve, reject) => {
-    const prompt = `${systemPrompt}\n\n${userText}`;
-    const escaped = prompt.replace(/'/g, "'\\''");
-    exec(
-      `echo '${escaped}' | claude --print --model haiku 2>/dev/null`,
-      { encoding: 'utf-8', timeout: 15000 },
-      (err, stdout) => {
-        if (err) {
-          console.log(`[LABEL-CLI] Failed: ${err.message.substring(0, 100)}`);
-          return reject(err);
-        }
-        const result = stdout.trim();
-        console.log(`[LABEL-CLI] Response: "${result}"`);
-        resolve(result);
-      }
-    );
-  });
-}
-
-async function generateSmartLabel(text) {
-  try {
-    const raw = await callClaude(
-      'Generate a short label (2-4 lowercase words, hyphenated, no quotes) summarizing this coding task. Reply with ONLY the label.',
-      text.substring(0, 300)
-    );
-    // Sanitize: lowercase, hyphenated, no special chars
-    const label = raw.toLowerCase().replace(/[^a-z0-9-\s]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-    if (label && label.length > 2 && label.length < 60) return label;
-  } catch (e) {
-    console.log(`[LABEL] LLM fallback: ${e.message}`);
-  }
-  return fallbackLabel(text);
+function generateSmartLabel(text) {
+  return Promise.resolve(fallbackLabel(text));
 }
 
 // Update a discovered agent's label from pane output (async, non-blocking)
@@ -92,30 +61,14 @@ async function refreshDiscoveredLabel(sessionName) {
 
   const rawOutput = capturePaneOutput(sessionName, 30);
   const output = stripAnsi(rawOutput).trim();
-  console.log(`[LABEL] Refreshing label for ${sessionName}, output length: ${output.length}`);
-  if (!output || output.length < 20) {
-    console.log(`[LABEL] Not enough output yet for ${sessionName}`);
-    return;
-  }
+  if (!output || output.length < 20) return;
 
   reg.labelRefreshed = true;
-  try {
-    const label = await callClaude(
-      'This is terminal output from a Claude Code AI agent working on a coding task. Generate a short label (2-4 lowercase words, hyphenated, no quotes) summarizing what this agent is doing. Reply with ONLY the label.',
-      output.substring(0, 500)
-    );
-    console.log(`[LABEL] Haiku returned for ${sessionName}: "${label}"`);
-    const clean = label.toLowerCase().replace(/[^a-z0-9-\s]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-    if (clean && clean.length > 2 && clean.length < 60) {
-      reg.label = clean;
-      saveRegistry();
-      console.log(`[LABEL] Discovered agent ${sessionName} labeled: ${clean}`);
-    } else {
-      console.log(`[LABEL] Rejected cleaned label: "${clean}"`);
-    }
-  } catch (e) {
-    console.log(`[LABEL] Failed for ${sessionName}: ${e.message}`);
-    reg.labelRefreshed = false; // Allow retry
+  const label = fallbackLabel(output);
+  if (label && label !== reg.label) {
+    reg.label = label;
+    saveRegistry();
+    console.log(`[LABEL] Discovered agent ${sessionName} labeled: ${label}`);
   }
 }
 
@@ -162,8 +115,8 @@ function hasClaudeDescendant(pid, tree) {
     visited.add(current);
 
     const cmd = tree.commands[current] || '';
-    // Match "claude" as a command (not "agent-viewer" or other incidental matches)
-    if (/(?:^|\/)claude\s/.test(cmd) || /(?:^|\/)claude$/.test(cmd)) {
+    // Match "opencode" as a command (not "agent-viewer" or other incidental matches)
+    if (/(?:^|\/)opencode\s/.test(cmd) || /(?:^|\/)opencode$/.test(cmd)) {
       return true;
     }
 
@@ -288,17 +241,17 @@ async function waitForClaudeReady(sessionName, timeoutMs = 30000) {
       continue;
     }
 
-    // If Claude is actively running a task, it's past startup prompts
-    if (/esc to interrupt/i.test(recentText)) return true;
+    if (/esc to interrupt|type your message|working|processing/i.test(recentText)) return true;
 
-    // Check if Claude is showing its input prompt (ready for input)
+    // OpenCode footer bar = ready for input
+    if (/tab\s+agents.*ctrl\+?p\s+commands/i.test(recentText)) return true;
+
     const lastLine = lines[lines.length - 1].trim();
-    if (/^>\s*$/.test(lastLine) || /^❯\s*$/.test(lastLine) || /^❯\s+\S/.test(lastLine)) {
+    if (/^[>❯$]\s*$/.test(lastLine) || /^[>❯$]\s+\S/.test(lastLine) || /^[>❯]\s*$/.test(lastLine)) {
       return true;
     }
 
-    // Also ready if showing common idle signals
-    if (/what.*would.*like/i.test(recentText) || /can i help/i.test(recentText)) {
+    if (/what.*would.*like|can i help|ready for|awaiting|waiting/i.test(recentText)) {
       return true;
     }
   }
@@ -331,7 +284,7 @@ async function spawnAgent(projectPath, prompt) {
     throw new Error(`Project path does not exist: ${projectPath}`);
   }
 
-  const claudeCmd = 'claude --chrome --dangerously-skip-permissions';
+  const claudeCmd = 'opencode';
   const tmuxCmd = `tmux new-session -d -s ${finalName} -c "${projectPath}" '${claudeCmd}'`;
 
   console.log(`[SPAWN] quickLabel=${quickLabel} name=${finalName}`);
@@ -453,23 +406,29 @@ function detectAgentState(sessionName, sessionsCache) {
   const recentText = lines.slice(-8).map(l => l.trim()).join('\n');
 
   // Check for interactive TUI prompts FIRST (before "esc to interrupt"),
-  // because Claude's status bar may show "esc to interrupt" while an
+  // because Claude/OpenCode's status bar may show "esc to interrupt" while an
   // interactive selection/permission prompt is also visible.
   const interactivePromptPatterns = [
-    /enter to select/i,                    // Single-select TUI prompt
-    /space to select/i,                    // Multi-select TUI prompt
-    /to navigate.*esc to cancel/i,         // General TUI selection hint
-    /Allow\s+(once|always)/i,              // Permission prompt options
-    /yes.*no.*always allow/i,             // Permission choice UI
-    /ctrl.g to edit/i,                     // Plan approval prompt
+    /enter to select|select.*option/i,     // Single-select TUI prompt
+    /space to select|check.*option/i,      // Multi-select TUI prompt
+    /to navigate.*esc to cancel|navigate.*cancel/i, // General TUI selection hint
+    /Allow\s+(once|always)|permit|authorize/i, // Permission prompt options
+    /yes.*no.*always allow|confirm.*deny/i, // Permission choice UI
+    /ctrl.g to edit|edit.*plan|approve.*plan/i, // Plan approval prompt
   ];
 
   if (interactivePromptPatterns.some(p => p.test(recentText))) {
     return 'idle';
   }
 
-  // Claude Code's status bar shows "esc to interrupt" only when actively running
-  if (/esc to interrupt/i.test(recentText)) {
+  // OpenCode idle detection: when the footer bar is visible, OpenCode is at its input prompt
+  // The footer shows "tab agents  ctrl+p commands" when idle/waiting for input
+  if (/tab\s+agents.*ctrl\+?p\s+commands|ctrl\+?p\s+commands.*tab\s+agents/i.test(recentText)) {
+    return 'idle';
+  }
+
+  // Agent status indicators: Claude shows "esc to interrupt", OpenCode may show different patterns
+  if (/esc to interrupt|type your message|working|processing|generating/i.test(recentText)) {
     return 'running';
   }
 
@@ -540,30 +499,30 @@ function detectPromptType(sessionName) {
 
   const recentText = lines.slice(-20).map(l => l.trim()).join('\n');
 
-  // Multi-select: "Space to select · Enter to confirm"
-  if (/space to select/i.test(recentText) && /enter to confirm/i.test(recentText)) {
+  // Multi-select: "Space to select · Enter to confirm" or OpenCode variants
+  if ((/space to select|check.*option/i.test(recentText)) && (/enter to confirm|confirm/i.test(recentText))) {
     return 'multiselect';
   }
 
-  // Permission prompt: "Allow once" / "Allow always" / "Deny"
-  if (/allow\s+(once|always)/i.test(recentText) && /deny/i.test(recentText)) {
+  // Permission prompt: "Allow once" / "Allow always" / "Deny" or OpenCode variants
+  if ((/allow\s+(once|always)|permit|authorize/i.test(recentText)) && (/deny|reject|cancel/i.test(recentText))) {
     return 'permission';
   }
 
   // Plan approval: check BEFORE generic select since plan prompts also show "enter to select"
-  if (/ctrl.g to edit/i.test(recentText) ||
-      (/manually approve/i.test(recentText) && /\d\.\s/.test(recentText)) ||
-      (/execute.*plan/i.test(recentText) && /\d\.\s/.test(recentText))) {
+  if (/ctrl.g to edit|edit.*plan|approve.*plan/i.test(recentText) ||
+      ((/manually approve|review.*plan/i.test(recentText)) && /\d\.\s/.test(recentText)) ||
+      ((/execute.*plan|proceed.*plan/i.test(recentText)) && /\d\.\s/.test(recentText))) {
     return 'plan';
   }
 
-  // Single select: "Enter to select · ↑/↓ to navigate"
-  if (/enter to select/i.test(recentText) && /to navigate/i.test(recentText)) {
+  // Single select: "Enter to select · ↑/↓ to navigate" or OpenCode variants
+  if ((/enter to select|select.*option/i.test(recentText)) && (/to navigate|arrow.*navigate|navigate/i.test(recentText))) {
     return 'select';
   }
 
   // Yes/No prompt
-  if (/\(y\/n\)/i.test(recentText) || (/yes.*no/i.test(recentText) && /do you want|shall i|should i/i.test(recentText))) {
+  if (/\(y\/n\)/i.test(recentText) || ((/yes.*no|confirm.*deny/i.test(recentText)) && (/do you want|shall i|should i|proceed/i.test(recentText)))) {
     return 'yesno';
   }
 
@@ -760,7 +719,7 @@ app.post('/api/agents/:name/send', (req, res) => {
     // If agent is completed/dead, re-spawn it in the same project
     if (reg && reg.state === 'completed') {
       const projectPath = reg.projectPath || '.';
-      const claudeCmd = 'claude --chrome --dangerously-skip-permissions';
+      const claudeCmd = 'opencode';
 
       execSync(
         `tmux new-session -d -s ${name} -c "${projectPath}" '${claudeCmd}'`,

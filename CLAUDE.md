@@ -1,10 +1,10 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to OpenCode when working with code in this repository.
 
 ## Project Overview
 
-Agent Viewer is a web-based kanban board for managing multiple Claude Code AI agents running in tmux sessions. It provides a central UI to spawn, monitor, message, and clean up concurrent Claude Code instances.
+Agent Viewer is a web-based kanban board for managing multiple OpenCode AI agents running in tmux sessions. It provides a central UI to spawn, monitor, message, and clean up concurrent OpenCode instances.
 
 ## Commands
 
@@ -26,13 +26,13 @@ This is a two-file application with no frameworks or build tooling:
 
 **Agent Registry**: In-memory object + `.agent-registry.json` persistence. Tracks agent label, project path, prompt, state, and timestamps. Auto-recovers on restart.
 
-**State Detection** (`detectAgentState()`): Polls tmux pane output every 3 seconds. Classifies agents as `running`, `idle`, or `completed` by pattern-matching Claude Code's terminal UI signals — "esc to interrupt" means running; empty prompts and permission requests mean idle.
+**State Detection** (`detectAgentState()`): Polls tmux pane output every 3 seconds. Classifies agents as `running`, `idle`, or `completed` by pattern-matching OpenCode's terminal UI signals — "esc to interrupt" means running; empty prompts and permission requests mean idle.
 
 **Tmux Integration**: Spawns agents via `tmux new-session`, captures output via `tmux capture-pane -e -p`, sends messages via `tmux send-keys`. All external commands have timeouts (5-15s).
 
-**Auto-Discovery**: Scans all tmux sessions, builds process trees to detect Claude descendants, and adds discovered sessions to the registry.
+**Auto-Discovery**: Scans all tmux sessions, builds process trees to detect OpenCode descendants, and adds discovered sessions to the registry.
 
-**LLM Label Generation**: Spawns a quick heuristic label immediately, then asynchronously calls Claude Haiku via CLI to generate a smarter label. Non-blocking — UI updates via SSE when the upgraded label arrives.
+**LLM Label Generation**: Spawns a quick heuristic label immediately, then asynchronously calls OpenCode via CLI to generate a smarter label. Non-blocking — UI updates via SSE when the upgraded label arrives.
 
 **SSE Endpoint** (`GET /api/events`): Broadcasts full agent state to all connected clients at `POLL_INTERVAL` (3s default).
 
@@ -60,4 +60,4 @@ Three-column kanban board (Running/Idle/Completed) with SSE-driven updates. Incl
 - External commands use `exec()` (async) with timeouts, not `execSync()`, to avoid blocking
 - Agent session names follow the format `agent-{label}` (lowercase, hyphenated)
 - Multipart file upload parsing is done manually without libraries
-- System dependencies: **tmux** and **claude** CLI must be available on PATH
+- System dependencies: **tmux** and **opencode** CLI must be available on PATH

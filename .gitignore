@@ -1,2 +1,9 @@
 node_modules/
 .agent-registry.json
+
+# IDE / OS
+.DS_Store
+
+# OpenCode / Sisyphus
+.opencode/
+.sisyphus/

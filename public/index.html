@@ -1262,6 +1262,62 @@ header .status-bar .dot {
   text-transform: uppercase;
 }
 
+/* ─── VIEW TOGGLE ──────────────────────────────────────────────────── */
+.view-toggle {
+  background: none;
+  border: 2px solid var(--amber);
+  color: var(--amber);
+  padding: 8px 16px;
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+
+.view-toggle:hover {
+  background: var(--amber);
+  color: var(--bg);
+}
+
+/* ─── GRID VIEW ────────────────────────────────────────────────────── */
+.grid-board {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 16px;
+  min-height: calc(100vh - 70px);
+  align-content: start;
+}
+
+.grid-board .card {
+  display: flex;
+  flex-direction: column;
+}
+
+.grid-board .card .activity {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.grid-board .empty-state {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 768px) {
+  .view-toggle {
+    display: none;
+  }
+
+  .grid-board {
+    grid-template-columns: 1fr;
+    padding: 12px;
+    padding-bottom: 96px;
+  }
+}
+
 /* ─── SCROLLBAR ─────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
@@ -1278,7 +1334,10 @@ header .status-bar .dot {
     <span class="dot"></span>
     <span id="connectionStatus">CONNECTING...</span>
   </div>
-  <button class="spawn-btn" onclick="openSpawnModal()">[+ SPAWN] <span style="color:var(--dim);font-size:10px;font-weight:400">(N)</span></button>
+  <div style="display:flex;gap:12px;align-items:center">
+    <button class="view-toggle" id="viewToggleBtn" onclick="toggleView()"></button>
+    <button class="spawn-btn" onclick="openSpawnModal()">[+ SPAWN] <span style="color:var(--dim);font-size:10px;font-weight:400">(N)</span></button>
+  </div>
 </header>
 
 <!-- ─── MOBILE TAB BAR ─────────────────────────────────────────────── -->
@@ -1292,6 +1351,9 @@ header .status-bar .dot {
     </button>
     <button class="tab" data-tab="completed" onclick="switchTab('completed')">
       DONE <span class="tab-count" id="tabDoneCount">[0]</span>
+    </button>
+    <button class="tab" data-tab="grid" onclick="toggleView()" id="mobileGridTab" style="color:var(--amber)">
+      GRID
     </button>
   </div>
 </div>
@@ -1331,6 +1393,9 @@ header .status-bar .dot {
     </div>
   </div>
 </div>
+
+<!-- ─── GRID VIEW ──────────────────────────────────────────────────── -->
+<div class="grid-board" id="gridBoard" style="display:none"></div>
 
 <!-- ─── MOBILE FAB ─────────────────────────────────────────────────── -->
 <button class="fab" onclick="openSpawnModal()">+</button>
@@ -1406,6 +1471,7 @@ let currentOutputAgent = null;
 let outputPollTimer = null;
 let pendingConfirm = null;
 let draggedAgentName = null;
+let currentView = localStorage.getItem('agentViewerView') || 'kanban';
 
 // ─── SSE CONNECTION ────────────────────────────────────────────────────
 let eventSource = null;
@@ -1455,26 +1521,88 @@ function renderBoard() {
   document.getElementById('idleCount').textContent = `[${idle.length}]`;
   document.getElementById('completedCount').textContent = `[${completed.length}]`;
 
-  renderColumn('runningColumn', running, 'NO RUNNING AGENTS');
-  renderColumn('idleColumn', idle, 'NO IDLE AGENTS');
-  renderColumn('completedColumn', completed, 'NO COMPLETED AGENTS');
+  updateViewToggleButton();
 
-  // Show/hide clear all button
-  document.getElementById('clearAllBtn').style.display = completed.length > 0 ? '' : 'none';
+  const boardEl = document.querySelector('.board');
+  const gridEl = document.getElementById('gridBoard');
+  const tabsEl = document.querySelector('.mobile-tabs');
 
-  // Update mobile tab counts
-  updateMobileTabs();
+  if (currentView === 'grid') {
+    boardEl.style.display = 'none';
+    gridEl.style.display = '';
+    if (tabsEl) tabsEl.style.display = 'none';
+    renderGridView(running, idle, completed);
+  } else {
+    boardEl.style.display = '';
+    gridEl.style.display = 'none';
+    if (tabsEl && isMobile()) tabsEl.style.display = 'block';
 
-  // Keep mobile column visibility in sync
-  if (isMobile()) {
-    document.querySelectorAll('.column').forEach(col => {
-      col.classList.toggle('mobile-active', col.dataset.state === activeTab);
-    });
+    renderColumn('runningColumn', running, 'NO RUNNING AGENTS');
+    renderColumn('idleColumn', idle, 'NO IDLE AGENTS');
+    renderColumn('completedColumn', completed, 'NO COMPLETED AGENTS');
+
+    document.getElementById('clearAllBtn').style.display = completed.length > 0 ? '' : 'none';
+
+    updateMobileTabs();
+
+    if (isMobile()) {
+      document.querySelectorAll('.column').forEach(col => {
+        col.classList.toggle('mobile-active', col.dataset.state === activeTab);
+      });
+    }
   }
 
-  // Update output viewer if open
   if (currentOutputAgent) {
     updateOutputViewer();
+  }
+}
+
+function renderGridView(running, idle, completed) {
+  const gridEl = document.getElementById('gridBoard');
+  const allAgents = [...running, ...idle, ...completed];
+
+  const focused = gridEl.querySelector('textarea:focus');
+  let focusedId = null, focusedValue = null, focusedSelStart = null, focusedSelEnd = null;
+  if (focused) {
+    focusedId = focused.id;
+    focusedValue = focused.value;
+    focusedSelStart = focused.selectionStart;
+    focusedSelEnd = focused.selectionEnd;
+  }
+
+  if (allAgents.length === 0) {
+    gridEl.innerHTML = '<div class="empty-state">NO AGENTS</div>';
+    return;
+  }
+
+  gridEl.innerHTML = allAgents.map(a => renderCard(a)).join('');
+
+  if (focusedId) {
+    const restored = document.getElementById(focusedId);
+    if (restored) {
+      restored.value = focusedValue;
+      restored.focus();
+      restored.selectionStart = focusedSelStart;
+      restored.selectionEnd = focusedSelEnd;
+    }
+  }
+}
+
+function toggleView() {
+  currentView = currentView === 'kanban' ? 'grid' : 'kanban';
+  localStorage.setItem('agentViewerView', currentView);
+  renderBoard();
+}
+
+function updateViewToggleButton() {
+  const btn = document.getElementById('viewToggleBtn');
+  if (!btn) return;
+  if (currentView === 'kanban') {
+    btn.textContent = '[# GRID]';
+    btn.title = 'Switch to Grid view (V)';
+  } else {
+    btn.textContent = '[= KANBAN]';
+    btn.title = 'Switch to Kanban view (V)';
   }
 }
 
@@ -2226,14 +2354,18 @@ document.addEventListener('keydown', (event) => {
     }
   }
 
-  // 'n' to open spawn modal (when not typing in an input)
   const tag = document.activeElement.tagName;
-  if (event.key === 'n' && tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
-    const anyOverlay = document.querySelector('.modal-overlay.active, .output-overlay.active, .confirm-overlay.active');
-    if (!anyOverlay) {
-      event.preventDefault();
-      openSpawnModal();
-    }
+  const noOverlay = !document.querySelector('.modal-overlay.active, .output-overlay.active, .confirm-overlay.active');
+  const notTyping = tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT';
+
+  if (event.key === 'n' && notTyping && noOverlay) {
+    event.preventDefault();
+    openSpawnModal();
+  }
+
+  if (event.key === 'v' && notTyping && noOverlay) {
+    event.preventDefault();
+    toggleView();
   }
 });
 
@@ -2439,6 +2571,7 @@ function initMobileLayout() {
 window.addEventListener('resize', initMobileLayout);
 
 // ─── INIT ──────────────────────────────────────────────────────────────
+updateViewToggleButton();
 fetchAgents();
 connectSSE();
 initMobileLayout();
